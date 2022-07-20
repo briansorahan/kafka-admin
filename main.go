@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
@@ -28,7 +28,7 @@ func main() {
 	resources := []kafka.ConfigResource{
 		{
 			Type: kafka.ResourceTopic,
-			Name: "se_decomposition.lmpd_raw_to_logical.pjm.20220315T1516Z",
+			Name: config.TopicName,
 		},
 	}
 	results, err := adminClient.DescribeConfigs(ctx, resources)
@@ -55,17 +55,13 @@ func main() {
 }
 
 type Config struct {
-	AuthDir     string
-	ClusterName string
-	TopicName   string
+	ConfigStrings FlagValues
+	TopicName     string
 }
 
 func NewConfig() (Config, error) {
-	aivenAuthDir := os.Getenv("AIVEN_AUTH_DIR")
-
 	var config Config
-	flag.StringVar(&config.AuthDir, "authdir", aivenAuthDir, "Directory containing files for SSL auth.")
-	flag.StringVar(&config.ClusterName, "c", "aiven", "Cluster name (aiven, confluent).")
+	flag.Var(&config.ConfigStrings, "X", "Configuration.")
 	flag.StringVar(&config.TopicName, "t", "", "Topic name (required).")
 	flag.Parse()
 
@@ -73,16 +69,31 @@ func NewConfig() (Config, error) {
 }
 
 func (config Config) KafkaConfigMap() (*kafka.ConfigMap, error) {
-	switch config.ClusterName {
-	case "aiven":
-		return &kafka.ConfigMap{
-			"bootstrap.servers":        "kafka-2851c2ea-ross-30b9.aivencloud.com:24942",
-			"security.protocol":        "SSL",
-			"ssl.ca.location":          filepath.Join(config.AuthDir, "cafile"),
-			"ssl.certificate.location": filepath.Join(config.AuthDir, "certfile"),
-			"ssl.key.location":         filepath.Join(config.AuthDir, "keyfile"),
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported cluster name: %s\n", config.ClusterName)
+	cm := kafka.ConfigMap{}
+	for _, cs := range config.ConfigStrings.Values {
+		parts := strings.Split(cs, "=")
+		if len(parts) < 2 {
+			return nil, errors.New("Format expected for kafka configs: -X KEY=VALUE")
+		}
+		cm[parts[0]] = strings.Join(parts[1:], "=")
 	}
+	return &cm, nil
+}
+
+// FlagValues makes it possible to set a flag multiple times.
+type FlagValues struct {
+	Values []string
+}
+
+// String converts the flag values into a string by joining the values with '|'
+func (fv *FlagValues) String() string {
+	if fv == nil {
+		return ""
+	}
+	return strings.Join(fv.Values, "|")
+}
+
+func (fv *FlagValues) Set(s string) error {
+	fv.Values = append(fv.Values, s)
+	return nil
 }
